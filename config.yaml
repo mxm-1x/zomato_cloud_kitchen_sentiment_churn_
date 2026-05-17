@@ -1,0 +1,57 @@
+project:
+  name: "Cloud Kitchen Sentiment & Churn Analysis"
+  version: "1.0.0"
+  author: "Data Science Team"
+
+data:
+  raw_path: "data/raw_zomato_bangalore.csv"
+  cleaned_path: "data/cleaned_zomato_bangalore.csv"
+  reviews_path: "data/exploded_reviews.csv"
+  sentiment_path: "data/reviews_with_sentiment.csv"
+  sentiment_summary_path: "data/restaurant_sentiment_summary.csv"
+  churn_features_path: "data/restaurants_with_churn_features.csv"
+
+sentiment:
+  method: "vader"  # Options: vader, textblob, fallback
+  operational_keywords:
+    delivery_delay: ["late", "delay", "waited", "hours", "slow", "forever", "never arrived"]
+    food_quality: ["cold", "stale", "spoiled", "undercooked", "burnt", "soggy", "bland"]
+    packaging: ["spilled", "leaked", "broken", "packaging", "container", "messy"]
+    service: ["rude", "unresponsive", "unprofessional", "behavior", "attitude"]
+    hygiene: ["hair", "dirty", "hygiene", "unclean", "rotten", "smelly"]
+    wrong_order: ["wrong", "missing", "cancelled", "refund", "incorrect"]
+
+churn:
+  threshold_conditions: 2  # Number of conditions to trigger churn label
+  risk_categories:
+    low: [0.0, 0.3]
+    medium: [0.3, 0.6]
+    high: [0.6, 0.8]
+    critical: [0.8, 1.0]
+  features:
+    - rate_numeric
+    - cost_numeric
+    - votes_numeric
+    - review_count
+    - online_order_binary
+    - book_table_binary
+    - avg_sentiment
+    - negative_review_pct
+    - operational_issue_rate
+    - days_since_last_review
+
+models:
+  random_forest:
+    n_estimators: 200
+    max_depth: 10
+    min_samples_split: 5
+  gradient_boosting:
+    n_estimators: 150
+    learning_rate: 0.1
+    max_depth: 6
+  logistic_regression:
+    max_iter: 1000
+
+reports:
+  output_dir: "reports"
+  formats: ["png", "csv", "md"]

@@ -1,0 +1,18 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Large raw datasets
+data/zomato.csv
+
+# macOS system files
+.DS_Store
+**/.DS_Store
