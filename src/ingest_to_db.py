@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -15,6 +16,35 @@ def get_db_engine():
     
     return create_engine(db_url, pool_pre_ping=True)
 
+def copy_df_to_postgres(df, table_name, engine):
+    """Highly optimized COPY streaming for extremely fast WAN uploads."""
+    print(f"Initializing COPY streaming for table '{table_name}'...")
+    
+    # 1. Create table structure using Pandas (without inserting any rows)
+    df.head(0).to_sql(table_name, engine, if_exists='replace', index=False)
+    
+    # 2. Establish raw connection to execute COPY
+    connection = engine.raw_connection()
+    try:
+        cursor = connection.cursor()
+        
+        # 3. Write DataFrame to memory buffer as tab-separated values
+        output = io.StringIO()
+        df.to_csv(output, sep='\t', header=False, index=False, na_rep='\\N')
+        output.seek(0)
+        
+        # 4. Execute copy query
+        copy_query = f"COPY {table_name} FROM STDIN WITH CSV DELIMITER '\t' NULL '\\N'"
+        cursor.copy_expert(copy_query, output)
+        connection.commit()
+        print(f"Successfully streamed {len(df)} rows to '{table_name}'.")
+    except Exception as e:
+        connection.rollback()
+        print(f"Error during COPY streaming: {e}")
+        raise e
+    finally:
+        connection.close()
+
 def ingest_data():
     engine = get_db_engine()
     
@@ -28,23 +58,21 @@ def ingest_data():
     if os.path.exists(restaurants_csv):
         print(f"Reading {restaurants_csv}...")
         df_rest = pd.read_csv(restaurants_csv)
-        print(f"Writing {len(df_rest)} restaurants to Neon...")
-        # Upload using replacement
-        df_rest.to_sql('restaurants', engine, index=False, if_exists='replace', method='multi', chunksize=5000)
+        
+        # Stream restaurants
+        copy_df_to_postgres(df_rest, 'restaurants', engine)
         
         # Build indexes on Postgres
         print("Building indexes on 'restaurants' table...")
         with engine.connect() as conn:
-            # Drop old indexes if they exist
             conn.execute(text("DROP INDEX IF EXISTS idx_rest_location;"))
             conn.execute(text("DROP INDEX IF EXISTS idx_rest_cuisine;"))
             conn.execute(text("DROP INDEX IF EXISTS idx_rest_id;"))
-            # Create new ones
             conn.execute(text("CREATE INDEX idx_rest_location ON restaurants(location);"))
             conn.execute(text("CREATE INDEX idx_rest_cuisine ON restaurants(primary_cuisine);"))
             conn.execute(text("CREATE INDEX idx_rest_id ON restaurants(restaurant_id);"))
             conn.commit()
-        print("Restaurant ingestion and indexing completed successfully.")
+        print("Restaurant indexes built successfully.")
     else:
         print(f"Error: {restaurants_csv} not found!")
 
@@ -55,18 +83,17 @@ def ingest_data():
         reviews_cols = ['restaurant_id', 'restaurant_name', 'review_text', 'review_rating', 'sentiment_label',
                         'delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
         
-        # Load in chunks to save memory during ingestion
+        # Load required columns
         df_rev = pd.read_csv(reviews_csv, usecols=lambda c: c in reviews_cols)
         
-        # Ensure booleans are converted to SQL Booleans or Integers (0/1)
+        # Ensure booleans are converted to Integers (0/1) for SQL compatibility
         bool_cols = ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
         for col in bool_cols:
             if col in df_rev.columns:
                 df_rev[col] = df_rev[col].fillna(0).astype(int)
 
-        print(f"Writing {len(df_rev)} reviews to Neon (in chunks)...")
-        # Write to PostgreSQL
-        df_rev.to_sql('reviews', engine, index=False, if_exists='replace', method='multi', chunksize=5000)
+        # Stream reviews
+        copy_df_to_postgres(df_rev, 'reviews', engine)
         
         # Build indexes on Postgres
         print("Building indexes on 'reviews' table...")
@@ -76,7 +103,7 @@ def ingest_data():
             conn.execute(text("CREATE INDEX idx_rev_rest_id ON reviews(restaurant_id);"))
             conn.execute(text("CREATE INDEX idx_rev_sentiment ON reviews(sentiment_label);"))
             conn.commit()
-        print("Review ingestion and indexing completed successfully.")
+        print("Review indexes built successfully.")
     else:
         print(f"Error: {reviews_csv} not found!")
 
