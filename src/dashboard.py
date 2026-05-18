@@ -98,10 +98,21 @@ KPI_CARD_STYLE = {
 # DATA LOADING & INITIALIZATION
 # -----------------------------------------------------------------------------
 def load_data():
-    """Load and aggregate datasets with fallbacks."""
-    # 1. Restaurants data
+    """Load and aggregate datasets with fallbacks optimized for low memory usage."""
+    # 1. Restaurants columns we actually need in the dashboard
+    restaurant_cols = [
+        'restaurant_id', 'name', 'location', 'rate_numeric', 'cost_numeric',
+        'votes_numeric', 'primary_cuisine', 'online_order_binary',
+        'book_table_binary', 'review_count', 'avg_sentiment',
+        'negative_review_pct', 'operational_issue_rate',
+        'days_since_last_review', 'churn_probability', 'risk_category'
+    ]
+
+    # 1. Restaurants data loading (with memory-optimized column selection)
     if os.path.exists('data/restaurants_with_churn_features.csv'):
-        df = pd.read_csv('data/restaurants_with_churn_features.csv')
+        available_cols = pd.read_csv('data/restaurants_with_churn_features.csv', nrows=0).columns
+        cols_to_load = [c for c in restaurant_cols if c in available_cols]
+        df = pd.read_csv('data/restaurants_with_churn_features.csv', usecols=cols_to_load)
     elif os.path.exists('data/cleaned_zomato_bangalore.csv'):
         df = pd.read_csv('data/cleaned_zomato_bangalore.csv')
         # Add basic churn features if model has not completed
@@ -129,26 +140,28 @@ def load_data():
             'risk_category': ['Low', 'High', 'Low', 'Critical', 'Medium']
         })
 
-    # 2. Exploded reviews data (sampled to keep dashboard fast)
+    # 2. Exploded reviews data (sampled heavily to keep memory low and fast)
     reviews_cols = ['restaurant_id', 'restaurant_name', 'review_text', 'review_rating', 'sentiment_label',
                     'delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
     
     if os.path.exists('data/reviews_with_sentiment.csv'):
         # Only load necessary columns to preserve memory
-        df_rev = pd.read_csv('data/reviews_with_sentiment.csv')
-        # Filter columns to only what we need
-        df_rev = df_rev[[c for c in reviews_cols if c in df_rev.columns]]
-        # Sample to keep memory small and fast
-        if len(df_rev) > 40000:
-            df_rev = df_rev.sample(n=40000, random_state=42)
+        available_cols = pd.read_csv('data/reviews_with_sentiment.csv', nrows=0).columns
+        cols_to_load = [c for c in reviews_cols if c in available_cols]
+        df_rev = pd.read_csv('data/reviews_with_sentiment.csv', usecols=cols_to_load)
+        # Sample to keep memory small and fast (10k is perfect for Render free tier)
+        if len(df_rev) > 10000:
+            df_rev = df_rev.sample(n=10000, random_state=42)
     elif os.path.exists('data/exploded_reviews.csv'):
-        df_rev = pd.read_csv('data/exploded_reviews.csv')
-        df_rev = df_rev[[c for c in reviews_cols if c in df_rev.columns]]
+        available_cols = pd.read_csv('data/exploded_reviews.csv', nrows=0).columns
+        cols_to_load = [c for c in reviews_cols if c in available_cols]
+        df_rev = pd.read_csv('data/exploded_reviews.csv', usecols=cols_to_load)
         df_rev['sentiment_label'] = df_rev['review_rating'].apply(lambda x: 'Positive' if x >= 4.0 else ('Negative' if x <= 2.0 else 'Neutral'))
         for issue in ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']:
-            df_rev[issue] = False
-        if len(df_rev) > 40000:
-            df_rev = df_rev.sample(n=40000, random_state=42)
+            if issue not in df_rev.columns:
+                df_rev[issue] = False
+        if len(df_rev) > 10000:
+            df_rev = df_rev.sample(n=10000, random_state=42)
     else:
         df_rev = pd.DataFrame(columns=reviews_cols)
 
