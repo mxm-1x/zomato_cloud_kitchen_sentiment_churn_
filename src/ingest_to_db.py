@@ -14,16 +14,16 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 def get_db_engine():
-    # Priority order: 1. env variable, 2. hardcoded connection string fallback
-    db_url = os.environ.get(
-        "DATABASE_URL", 
-        "postgresql://neondb_owner:npg_tSRYv5mXKs4P@ep-misty-rice-ap6vsh1m-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-    )
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise ValueError("DATABASE_URL environment variable is missing!")
+        
     # Fix render's postgres:// to postgresql:// format if needed
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     
     return create_engine(db_url, pool_pre_ping=True)
+
 
 def copy_df_to_postgres(df, table_name, engine):
     """Highly optimized COPY streaming for extremely fast WAN uploads."""

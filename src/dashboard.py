@@ -109,15 +109,15 @@ KPI_CARD_STYLE = {
 from sqlalchemy import create_engine, text
 
 def get_db_engine():
-    # Read from environment, fallback to Neon connection string
-    db_url = os.environ.get(
-        "DATABASE_URL", 
-        "postgresql://neondb_owner:npg_tSRYv5mXKs4P@ep-misty-rice-ap6vsh1m-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-    )
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise ValueError("DATABASE_URL environment variable is missing!")
+        
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     
     return create_engine(db_url, pool_pre_ping=True)
+
 
 def load_data():
     """Load restaurant metadata from cloud Neon PostgreSQL."""
