@@ -7,7 +7,16 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
+# Load local .env file if it exists
+if os.path.exists('.env'):
+    with open('.env') as f:
+        for line in f:
+            if '=' in line and not line.startswith('#'):
+                k, v = line.strip().split('=', 1)
+                os.environ[k] = v.strip('"\'')
+
 import plotly.io as pio
+
 
 # Global font
 FONT_FAMILY = "'Outfit', sans-serif"

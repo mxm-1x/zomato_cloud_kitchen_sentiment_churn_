@@ -16,3 +16,6 @@ data/zomato.csv
 # macOS system files
 .DS_Store
 **/.DS_Store
+
+# Local Environment Secrets
+.env

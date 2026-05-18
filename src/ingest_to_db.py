@@ -1,6 +1,15 @@
 import os
+# Load local .env file if it exists
+if os.path.exists('.env'):
+    with open('.env') as f:
+        for line in f:
+            if '=' in line and not line.startswith('#'):
+                k, v = line.strip().split('=', 1)
+                os.environ[k] = v.strip('"\'')
+
 import sys
 import io
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 
