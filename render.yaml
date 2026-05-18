@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: cloud-kitchen-sentiment-churn-dashboard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn src.dashboard:server --workers 2 --threads 2 --timeout 120
+    envVars:
+      - key: DASH_DEBUG
+        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.11.8"
