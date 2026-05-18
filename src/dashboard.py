@@ -97,122 +97,78 @@ KPI_CARD_STYLE = {
 # -----------------------------------------------------------------------------
 # DATA LOADING & INITIALIZATION
 # -----------------------------------------------------------------------------
-def load_data():
-    """Load and aggregate datasets with fallbacks optimized for low memory usage."""
-    # 1. Restaurants columns we actually need in the dashboard
-    restaurant_cols = [
-        'restaurant_id', 'name', 'location', 'rate_numeric', 'cost_numeric',
-        'votes_numeric', 'primary_cuisine', 'online_order_binary',
-        'book_table_binary', 'review_count', 'avg_sentiment',
-        'negative_review_pct', 'operational_issue_rate',
-        'days_since_last_review', 'churn_probability', 'risk_category'
-    ]
+from sqlalchemy import create_engine, text
 
-    # 1. Restaurants data loading (with memory-optimized column selection)
-    if os.path.exists('data/restaurants_with_churn_features.csv'):
-        available_cols = pd.read_csv('data/restaurants_with_churn_features.csv', nrows=0).columns
-        cols_to_load = [c for c in restaurant_cols if c in available_cols]
-        df = pd.read_csv('data/restaurants_with_churn_features.csv', usecols=cols_to_load)
-    elif os.path.exists('data/cleaned_zomato_bangalore.csv'):
-        df = pd.read_csv('data/cleaned_zomato_bangalore.csv')
-        # Add basic churn features if model has not completed
-        df['churn_label'] = (df['rate_numeric'] < 3.3).astype(int)
-        df['churn_probability'] = df['churn_label'] * 0.8
-        df['risk_category'] = df['churn_label'].apply(lambda x: 'High' if x == 1 else 'Low')
-    else:
-        # Fallback dummy data
-        df = pd.DataFrame({
-            'restaurant_id': range(1, 6),
-            'name': ['Kitchen A', 'Kitchen B', 'Kitchen C', 'Kitchen D', 'Kitchen E'],
-            'location': ['Indiranagar', 'BTM', 'Koramangala', 'HSR', 'Indiranagar'],
-            'rate_numeric': [4.2, 3.1, 4.5, 2.9, 3.8],
-            'cost_numeric': [500, 300, 600, 250, 450],
-            'votes_numeric': [120, 45, 300, 12, 89],
-            'primary_cuisine': ['North Indian', 'South Indian', 'Continental', 'Fast Food', 'Cafe'],
-            'online_order_binary': [1, 1, 0, 1, 1],
-            'book_table_binary': [0, 0, 1, 0, 0],
-            'review_count': [15, 6, 25, 2, 10],
-            'avg_sentiment': [0.4, -0.1, 0.6, -0.3, 0.2],
-            'negative_review_pct': [10, 50, 5, 80, 20],
-            'operational_issue_rate': [0.05, 0.25, 0.02, 0.40, 0.10],
-            'days_since_last_review': [12, 45, 5, 89, 23],
-            'churn_probability': [0.15, 0.65, 0.05, 0.90, 0.30],
-            'risk_category': ['Low', 'High', 'Low', 'Critical', 'Medium']
-        })
-
-    # 2. Exploded reviews data (sampled heavily to keep memory low and fast)
-    reviews_cols = ['restaurant_id', 'restaurant_name', 'review_text', 'review_rating', 'sentiment_label',
-                    'delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
+def get_db_engine():
+    # Read from environment, fallback to Neon connection string
+    db_url = os.environ.get(
+        "DATABASE_URL", 
+        "postgresql://neondb_owner:npg_tSRYv5mXKs4P@ep-misty-rice-ap6vsh1m-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    )
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
     
-    if os.path.exists('data/reviews_with_sentiment.csv'):
-        # Only load necessary columns to preserve memory
-        available_cols = pd.read_csv('data/reviews_with_sentiment.csv', nrows=0).columns
-        cols_to_load = [c for c in reviews_cols if c in available_cols]
-        df_rev = pd.read_csv('data/reviews_with_sentiment.csv', usecols=cols_to_load)
-        # Sample to keep memory small and fast (10k is perfect for Render free tier)
-        if len(df_rev) > 10000:
-            df_rev = df_rev.sample(n=10000, random_state=42)
-    elif os.path.exists('data/exploded_reviews.csv'):
-        available_cols = pd.read_csv('data/exploded_reviews.csv', nrows=0).columns
-        cols_to_load = [c for c in reviews_cols if c in available_cols]
-        df_rev = pd.read_csv('data/exploded_reviews.csv', usecols=cols_to_load)
-        df_rev['sentiment_label'] = df_rev['review_rating'].apply(lambda x: 'Positive' if x >= 4.0 else ('Negative' if x <= 2.0 else 'Neutral'))
-        for issue in ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']:
-            if issue not in df_rev.columns:
-                df_rev[issue] = False
-        if len(df_rev) > 10000:
-            df_rev = df_rev.sample(n=10000, random_state=42)
-    else:
-        df_rev = pd.DataFrame(columns=reviews_cols)
+    return create_engine(db_url, pool_pre_ping=True)
 
-    # Make sure location coordinates exist for map (fallback to aggregated catalog if needed)
-    # Since original data doesn't have lat/long, we'll create coordinate mappings for Bangalore major regions
+def load_data():
+    """Load restaurant metadata from cloud Neon PostgreSQL."""
+    try:
+        print("Connecting to cloud Neon database...")
+        engine = get_db_engine()
+        # Fetch restaurants metadata from Postgres (only loads the 16 columns we actually use, reducing WAN overhead)
+        columns_to_load = [
+            'restaurant_id', 'name', 'location', 'rate_numeric', 'cost_numeric',
+            'votes_numeric', 'primary_cuisine', 'online_order_binary',
+            'book_table_binary', 'review_count', 'avg_sentiment',
+            'negative_review_pct', 'operational_issue_rate',
+            'days_since_last_review', 'churn_probability', 'risk_category'
+        ]
+        query = f"SELECT {', '.join(columns_to_load)} FROM restaurants"
+        df = pd.read_sql_query(query, engine)
+        print(f"Successfully loaded {len(df)} restaurants from Neon DB.")
+    except Exception as e:
+        print(f"Error loading from Neon: {e}. Falling back to CSVs.")
+        # Fallback to local files if Neon connection fails
+        if os.path.exists('data/restaurants_with_churn_features.csv'):
+            df = pd.read_csv('data/restaurants_with_churn_features.csv')
+        else:
+            # Fallback dummy data
+            df = pd.DataFrame({
+                'restaurant_id': range(1, 6),
+                'name': ['Kitchen A', 'Kitchen B', 'Kitchen C', 'Kitchen D', 'Kitchen E'],
+                'location': ['Indiranagar', 'BTM', 'Koramangala', 'HSR', 'Indiranagar'],
+                'rate_numeric': [4.2, 3.1, 4.5, 2.9, 3.8],
+                'cost_numeric': [500, 300, 600, 250, 450],
+                'votes_numeric': [120, 45, 300, 12, 89],
+                'primary_cuisine': ['North Indian', 'South Indian', 'Continental', 'Fast Food', 'Cafe'],
+                'online_order_binary': [1, 1, 0, 1, 1],
+                'book_table_binary': [0, 0, 1, 0, 0],
+                'review_count': [15, 6, 25, 2, 10],
+                'avg_sentiment': [0.4, -0.1, 0.6, -0.3, 0.2],
+                'negative_review_pct': [10, 50, 5, 80, 20],
+                'operational_issue_rate': [0.05, 0.25, 0.02, 0.40, 0.10],
+                'days_since_last_review': [12, 45, 5, 89, 23],
+                'churn_probability': [0.15, 0.65, 0.05, 0.90, 0.30],
+                'risk_category': ['Low', 'High', 'Low', 'Critical', 'Medium']
+            })
+
+    # Location coordinates addition
     location_coords = {
-        'BTM': (12.9166, 77.6101),
-        'HSR': (12.9100, 77.6450),
-        'Koramangala': (12.9352, 77.6244),
-        'Jayanagar': (12.9307, 77.5832),
-        'Indiranagar': (12.9719, 77.6412),
-        'JP Nagar': (12.9063, 77.5857),
-        'Whitefield': (12.9698, 77.7500),
-        'Marathahalli': (12.9569, 77.7011),
-        'Bannerghatta Road': (12.8900, 77.5900),
-        'Electronic City': (12.8490, 77.6500),
-        'Bellandur': (12.9304, 77.6784),
-        'Sarjapur Road': (12.9100, 77.6800),
-        'MG Road': (12.9738, 77.6119),
-        'Brigade Road': (12.9700, 77.6080),
-        'Kalyan Nagar': (13.0232, 77.6432),
-        'Rajajinagar': (12.9882, 77.5543),
-        'Malleshwaram': (13.0031, 77.5684),
-        'Banashankari': (12.9254, 77.5468),
-        'Basavanagudi': (12.9417, 77.5750),
-        'Frazer Town': (12.9972, 77.6147),
-        'Richmond Road': (12.9667, 77.6000),
-        'Lavelle Road': (12.9700, 77.6000),
-        'Ulsoor': (12.9817, 77.6284),
-        'Commercial Street': (12.9808, 77.6083),
-        'Domlur': (12.9610, 77.6387),
-        'Residency Road': (12.9667, 77.6083),
-        'Kammanahalli': (13.0159, 77.6378),
-        'Cunningham Road': (12.9842, 77.5969),
-        'Old Airport Road': (12.9500, 77.6600),
-        'Brookefield': (12.9628, 77.7125),
-        'New BEL Road': (13.0300, 77.5700),
-        'Sanjay Nagar': (13.0300, 77.5800),
-        'Koramangala 5th Block': (12.9350, 77.6200),
-        'Koramangala 6th Block': (12.9370, 77.6230),
-        'Koramangala 7th Block': (12.9330, 77.6250),
-        'Koramangala 4th Block': (12.9320, 77.6280),
-        'Koramangala 8th Block': (12.9380, 77.6300),
-        'Koramangala 1st Block': (12.9272, 77.6344),
-        'Jayanagar 4th Block': (12.9290, 77.5820),
-        'Jayanagar 9th Block': (12.9210, 77.5930),
-        'Jayanagar 3rd Block': (12.9320, 77.5800),
-        'Jayanagar 8th Block': (12.9230, 77.5800),
-        'HSR Layout': (12.9100, 77.6450),
-        'Banashankari Stage II': (12.9260, 77.5500),
-        'Banashankari Stage III': (12.9200, 77.5400),
+        'BTM': (12.9166, 77.6101), 'HSR': (12.9100, 77.6450), 'Koramangala': (12.9352, 77.6244),
+        'Jayanagar': (12.9307, 77.5832), 'Indiranagar': (12.9719, 77.6412), 'JP Nagar': (12.9063, 77.5857),
+        'Whitefield': (12.9698, 77.7500), 'Marathahalli': (12.9569, 77.7011), 'Bannerghatta Road': (12.8900, 77.5900),
+        'Electronic City': (12.8490, 77.6500), 'Bellandur': (12.9304, 77.6784), 'Sarjapur Road': (12.9100, 77.6800),
+        'MG Road': (12.9738, 77.6119), 'Brigade Road': (12.9700, 77.6080), 'Kalyan Nagar': (13.0232, 77.6432),
+        'Rajajinagar': (12.9882, 77.5543), 'Malleshwaram': (13.0031, 77.5684), 'Banashankari': (12.9254, 77.5468),
+        'Basavanagudi': (12.9417, 77.5750), 'Frazer Town': (12.9972, 77.6147), 'Richmond Road': (12.9667, 77.6000),
+        'Lavelle Road': (12.9700, 77.6000), 'Ulsoor': (12.9817, 77.6284), 'Commercial Street': (12.9808, 77.6083),
+        'Domlur': (12.9610, 77.6387), 'Residency Road': (12.9667, 77.6083), 'Kammanahalli': (13.0159, 77.6378),
+        'Cunningham Road': (12.9842, 77.5969), 'Old Airport Road': (12.9500, 77.6600), 'Brookefield': (12.9628, 77.7125),
+        'New BEL Road': (13.0300, 77.5700), 'Sanjay Nagar': (13.0300, 77.5800), 'Koramangala 5th Block': (12.9350, 77.6200),
+        'Koramangala 6th Block': (12.9370, 77.6230), 'Koramangala 7th Block': (12.9330, 77.6250), 'Koramangala 4th Block': (12.9320, 77.6280),
+        'Koramangala 8th Block': (12.9380, 77.6300), 'Koramangala 1st Block': (12.9272, 77.6344), 'Jayanagar 4th Block': (12.9290, 77.5820),
+        'Jayanagar 9th Block': (12.9210, 77.5930), 'Jayanagar 3rd Block': (12.9320, 77.5800), 'Jayanagar 8th Block': (12.9230, 77.5800),
+        'HSR Layout': (12.9100, 77.6450), 'Banashankari Stage II': (12.9260, 77.5500), 'Banashankari Stage III': (12.9200, 77.5400),
         'Unknown': (12.9716, 77.5946)
     }
 
@@ -225,7 +181,7 @@ def load_data():
     df['latitude'] += np.random.uniform(-0.005, 0.005, size=len(df))
     df['longitude'] += np.random.uniform(-0.005, 0.005, size=len(df))
 
-    return df, df_rev
+    return df, pd.DataFrame()
 
 # Load datasets
 df_restaurants, df_reviews = load_data()
@@ -886,38 +842,77 @@ def update_overview_tab(selected_locations, selected_cuisines, selected_risks):
      Input("sentiment-select", "value")]
 )
 def update_sentiment_tab(locations, cuisines, risks, search_query, selected_issue, selected_sentiment):
-    # Filter reviews dataframe
-    dff_rev = df_reviews.copy()
-    
-    # 1. Sidebar Location/Cuisine Filter mapping to individual reviews
-    # Merge restaurant metadata to filter reviews
-    if locations or cuisines or risks:
-        rest_filter = df_restaurants.copy()
-        if locations:
-            rest_filter = rest_filter[rest_filter["location"].isin(locations)]
-        if cuisines:
-            rest_filter = rest_filter[rest_filter["primary_cuisine"].isin(cuisines)]
-        if risks:
-            rest_filter = rest_filter[rest_filter["risk_category"].isin(risks)]
+    try:
+        engine = get_db_engine()
+        
+        # Build query parts dynamically with placeholders
+        query_parts = ["SELECT * FROM reviews WHERE 1=1"]
+        params = {}
+        
+        # 1. Location / Cuisine filters mapping to restaurant_id
+        if locations or cuisines or risks:
+            sub_query = "SELECT restaurant_id FROM restaurants WHERE 1=1"
+            if locations:
+                placeholders = []
+                for idx, val in enumerate(locations):
+                    key = f"loc_{idx}"
+                    placeholders.append(f":{key}")
+                    params[key] = val
+                sub_query += f" AND location IN ({', '.join(placeholders)})"
+            if cuisines:
+                placeholders = []
+                for idx, val in enumerate(cuisines):
+                    key = f"cuis_{idx}"
+                    placeholders.append(f":{key}")
+                    params[key] = val
+                sub_query += f" AND primary_cuisine IN ({', '.join(placeholders)})"
+            if risks:
+                placeholders = []
+                for idx, val in enumerate(risks):
+                    key = f"risk_{idx}"
+                    placeholders.append(f":{key}")
+                    params[key] = val
+                sub_query += f" AND risk_category IN ({', '.join(placeholders)})"
+                
+            query_parts.append(f"AND restaurant_id IN ({sub_query})")
             
-        allowed_ids = set(rest_filter["restaurant_id"])
-        dff_rev = dff_rev[dff_rev["restaurant_id"].isin(allowed_ids)]
-
-    # 2. Text Search Query Filter
-    if search_query:
-        dff_rev = dff_rev[dff_rev["review_text"].astype(str).str.contains(search_query, case=False, na=False)]
-
-    # 3. Operational Issue Filter
-    if selected_issue:
-        if selected_issue == "any":
-            issue_cols = ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
-            dff_rev = dff_rev[dff_rev[[c for c in issue_cols if c in dff_rev.columns]].any(axis=1)]
-        elif selected_issue in dff_rev.columns:
-            dff_rev = dff_rev[dff_rev[selected_issue] == True]
-
-    # 4. Sentiment Polarity Filter
-    if selected_sentiment:
-        dff_rev = dff_rev[dff_rev["sentiment_label"] == selected_sentiment]
+        # 2. Text Search Query Filter
+        if search_query:
+            query_parts.append("AND review_text ILIKE :search_query")
+            params["search_query"] = f"%{search_query}%"
+            
+        # 3. Operational Issue Filter
+        if selected_issue:
+            if selected_issue == "any":
+                query_parts.append("AND (delivery_delay=1 OR food_quality=1 OR packaging=1 OR service=1 OR hygiene=1 OR wrong_order=1)")
+            else:
+                issue_cols = ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
+                if selected_issue in issue_cols:
+                    query_parts.append(f"AND {selected_issue}=1")
+                    
+        # 4. Sentiment Polarity Filter
+        if selected_sentiment:
+            query_parts.append("AND sentiment_label = :sentiment")
+            params["sentiment"] = selected_sentiment
+            
+        # Limit results for rendering speed
+        query_parts.append("LIMIT 5000")
+        
+        full_query = " ".join(query_parts)
+        
+        # Execute query using connection
+        with engine.connect() as conn:
+            # Execute with parameter dictionary
+            dff_rev = pd.read_sql_query(text(full_query), conn, params=params)
+    except Exception as e:
+        print("SQL Error fetching reviews:", e)
+        return go.Figure(), go.Figure(), []
+    
+    # Convert booleans for incident counts
+    issue_cols = ['delivery_delay', 'food_quality', 'packaging', 'service', 'hygiene', 'wrong_order']
+    for col in issue_cols:
+        if col in dff_rev.columns:
+            dff_rev[col] = dff_rev[col].astype(bool)
 
     # Plot Sentiment Pie Chart
     if not dff_rev.empty:
@@ -975,22 +970,15 @@ def update_sentiment_tab(locations, cuisines, risks, search_query, selected_issu
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         coloraxis_showscale=False,
-        xaxis=dict(
-            showgrid=False,
-            visible=False,
-            title=None
-        ),
-        yaxis=dict(
-            showgrid=False,
-            title=None,
-            tickfont=dict(family=FONT_FAMILY, size=12, color="#1C1C1C")
-        )
+        xaxis=dict(showgrid=False, visible=False, title=None),
+        yaxis=dict(showgrid=False, title=None, tickfont=dict(family=FONT_FAMILY, size=12, color="#1C1C1C"))
     )
 
-    # Reviews table data extraction
+    # Reviews table data extraction (Limit to top 30)
     table_data = dff_rev.head(30).to_dict("records")
     
     return fig_pie, fig_bar, table_data
+
 
 
 # -----------------------------------------------------------------------------
